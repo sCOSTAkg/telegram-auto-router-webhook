@@ -16,7 +16,9 @@ def home():
     return jsonify({
         "status": "ok",
         "message": "Telegram Auto-Router Webhook Server",
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
+        "recipe_id": RECIPE_ID,
+        "has_api_key": bool(COMPOSIO_API_KEY)
     })
 
 @app.route('/health')
@@ -32,7 +34,12 @@ def telegram_webhook():
         if not update:
             return jsonify({"error": "No update received"}), 400
 
-        print(f"[{datetime.utcnow().isoformat()}] Received update: {json.dumps(update)[:200]}...")
+        print(f"[{datetime.utcnow().isoformat()}] Received update_id: {update.get('update_id')}")
+
+        # Проверяем наличие API ключа
+        if not COMPOSIO_API_KEY:
+            print(f"[{datetime.utcnow().isoformat()}] ERROR: COMPOSIO_API_KEY not set!")
+            return jsonify({"ok": False, "error": "COMPOSIO_API_KEY not configured"}), 200
 
         # Отправляем в рецепт Composio
         headers = {
@@ -54,11 +61,15 @@ def telegram_webhook():
         )
 
         print(f"[{datetime.utcnow().isoformat()}] Composio response status: {response.status_code}")
+        print(f"[{datetime.utcnow().isoformat()}] Response: {response.text[:200]}")
 
         if response.status_code == 200:
-            result = response.json()
-            print(f"[{datetime.utcnow().isoformat()}] Recipe executed successfully")
-            return jsonify({"ok": True, "result": result}), 200
+            try:
+                result = response.json()
+                print(f"[{datetime.utcnow().isoformat()}] Recipe executed")
+                return jsonify({"ok": True, "result": result}), 200
+            except:
+                return jsonify({"ok": True, "result": "processed"}), 200
         else:
             error_text = response.text[:500]
             print(f"[{datetime.utcnow().isoformat()}] Recipe error: {error_text}")
@@ -66,9 +77,13 @@ def telegram_webhook():
 
     except Exception as e:
         print(f"[{datetime.utcnow().isoformat()}] Exception: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"ok": False, "error": str(e)}), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     print(f"Starting server on port {port}...")
+    print(f"Recipe ID: {RECIPE_ID}")
+    print(f"Has API Key: {bool(COMPOSIO_API_KEY)}")
     app.run(host='0.0.0.0', port=port)
