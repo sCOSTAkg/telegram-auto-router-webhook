@@ -1,15 +1,22 @@
 from flask import Flask, request, jsonify
 import requests
-import json
+import logging
 import os
 from datetime import datetime
 
 app = Flask(__name__)
 
-# Получаем переменные окружения
+# Логирование
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Глобальные переменные
 COMPOSIO_API_KEY = os.environ.get('COMPOSIO_API_KEY')
 RECIPE_ID = os.environ.get('RECIPE_ID', 'rcp_PXDn1btLCf0u')
 COMPOSIO_RECIPE_URL = f"https://backend.composio.dev/api/v3/recipe/{RECIPE_ID}/execute"
+
+if not COMPOSIO_API_KEY:
+    raise RuntimeError("Не настроен API ключ (COMPOSIO_API_KEY)")
 
 @app.route('/')
 def home():
@@ -32,58 +39,52 @@ def telegram_webhook():
         update = request.get_json()
 
         if not update:
+            logger.warning("Не получен update")
             return jsonify({"error": "No update received"}), 400
 
-        print(f"[{datetime.utcnow().isoformat()}] Received update_id: {update.get('update_id')}")
+        logger.info(f"Получено обновление: update_id={update.get('update_id')}")
 
         # Проверяем наличие API ключа
         if not COMPOSIO_API_KEY:
-            print(f"[{datetime.utcnow().isoformat()}] ERROR: COMPOSIO_API_KEY not set!")
-            return jsonify({"ok": False, "error": "COMPOSIO_API_KEY not configured"}), 200
+            logger.error("Отсутствует COMPOSIO_API_KEY!")
+            return jsonify({"ok": False, "error": "COMPOSIO_API_KEY not configured"}), 503
 
-        # Отправляем в рецепт Composio
+        # Отправляем данные в Composio
         headers = {
             "X-API-KEY": COMPOSIO_API_KEY,
             "Content-Type": "application/json"
         }
 
         payload = {
-            "telegram_update": json.dumps(update)
+            "telegram_update": update
         }
-
-        print(f"[{datetime.utcnow().isoformat()}] Calling Composio recipe {RECIPE_ID}...")
 
         response = requests.post(
             COMPOSIO_RECIPE_URL,
             json=payload,
             headers=headers,
-            timeout=30
+            timeout=int(os.environ.get('REQUESTS_TIMEOUT', 30))
         )
 
-        print(f"[{datetime.utcnow().isoformat()}] Composio response status: {response.status_code}")
-        print(f"[{datetime.utcnow().isoformat()}] Response: {response.text[:200]}")
-
+        logger.info(f"Ответ Composio: {response.status_code}")
         if response.status_code == 200:
             try:
-                result = response.json()
-                print(f"[{datetime.utcnow().isoformat()}] Recipe executed")
-                return jsonify({"ok": True, "result": result}), 200
-            except:
+                return jsonify({"ok": True, "result": response.json()}), 200
+            except ValueError:
+                logger.error("Ошибка обработки JSON ответа от Composio")
                 return jsonify({"ok": True, "result": "processed"}), 200
-        else:
-            error_text = response.text[:500]
-            print(f"[{datetime.utcnow().isoformat()}] Recipe error: {error_text}")
-            return jsonify({"ok": False, "error": error_text}), 200
 
+        logger.error(f"Ошибка Composio: {response.text}")
+        return jsonify({"ok": False, "error": response.text[:500]}), 502
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка сети: {e}")
+        return jsonify({"ok": False, "error": "Service unavailable"}), 503
     except Exception as e:
-        print(f"[{datetime.utcnow().isoformat()}] Exception: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"ok": False, "error": str(e)}), 200
+        logger.exception("Исключение при обработке вебхука")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    print(f"Starting server on port {port}...")
-    print(f"Recipe ID: {RECIPE_ID}")
-    print(f"Has API Key: {bool(COMPOSIO_API_KEY)}")
+    logger.info(f"Запуск сервера на порту {port}")
     app.run(host='0.0.0.0', port=port)
